@@ -10,7 +10,7 @@ EXTENSION = pathman_sharding
 
 EXTVERSION = 0.1
 
-DATA = pathman_sharding--$(EXTVERSION).sql
+DATA_built = pathman_sharding--$(EXTVERSION).sql
 
 PGFILEDESC = "pathman_sharding - Improved sharding for pg_pathman"
 
@@ -30,3 +30,6 @@ top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+$(EXTENSION)--$(EXTVERSION).sql: init.sql
+	cat $^ > $@

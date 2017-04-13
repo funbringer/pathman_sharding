@@ -9,4 +9,4 @@ regression.out
 *.gcda
 *.gcno
 *.gcov
-pg_pathman--*.sql
+pathman_sharding--*.sql

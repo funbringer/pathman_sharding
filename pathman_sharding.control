@@ -2,4 +2,4 @@
 comment = 'Improved sharding for pg_pathman'
 default_version = '0.1'
 module_pathname = '$libdir/pathman_sharding'
-requires = 'pg_pathman'
+requires = 'pg_pathman, postgres_fdw'
