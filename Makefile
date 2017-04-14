@@ -2,7 +2,7 @@
 
 MODULE_big = pathman_sharding
 
-OBJS = src/pathman_sharding.o src/hooks.o $(WIN32RES)
+OBJS = src/pathman_sharding.o src/hooks.o src/parse_utils.o $(WIN32RES)
 
 PG_CPPFLAGS = -I$(CURDIR)/src/include
 

@@ -9,6 +9,7 @@
  */
 
 #include "hooks.h"
+#include "parse_utils.h"
 #include "pathman_sharding.h"
 
 #include "postgres.h"
@@ -23,6 +24,7 @@
 #include "executor/spi.h"
 #include "fmgr.h"
 #include "foreign/foreign.h"
+#include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
@@ -37,6 +39,14 @@ PG_MODULE_MAGIC;
 
 
 void _PG_init(void);
+
+static char *rebuild_indexdef_for_partition(char *index_def,
+											Oid index_relid,
+											Relation parent_rel,
+											Relation foreign_rel);
+
+static const char *get_rel_name_quoted(Oid relid);
+static const char *get_rel_name_qualified(Oid relid);
 
 static Oid pg_pathman_get_parent(Oid partition_relid);
 static void pgfdw_execute_command(const char *command, Oid foreign_server);
@@ -90,10 +100,11 @@ is_pathman_sharding_related_ftable_creation(const Node *parsetree,
 	if (!OidIsValid(parent_relid))
 		return false;
 
+	/* Return 'parent_tbl' */
 	if (parent_tbl)
 		*parent_tbl = parent_relid;
 
-	/* Return 'foreign_rel' */
+	/* Return 'foreign_tbl' */
 	if (foreign_tbl)
 		*foreign_tbl = foreign_relid;
 
@@ -163,20 +174,20 @@ pathman_sharding_inflate_foreign_table(Oid parent_tbl,
 									   Oid foreign_tbl,
 									   Oid foreign_server)
 {
-	Relation	parent_rel,
-				foreign_rel;
-	TupleDesc	foreign_descr;
-	List	   *index_list;
-	StringInfo	query;
-	ListCell   *lc;
-	int			i;
+	Relation		parent_rel,
+					foreign_rel;
+	TupleDesc		foreign_descr;
+	List		   *index_list;
+	StringInfoData	query;
+	ListCell	   *lc;
+	int				i;
 
 	/* Should be locked already */
 	foreign_rel = heap_open(foreign_tbl, NoLock);
 	foreign_descr = RelationGetDescr(foreign_rel);
 
-	query = makeStringInfo();
-	appendStringInfo(query, "CREATE TABLE %s.%s (",
+	initStringInfo(&query);
+	appendStringInfo(&query, "CREATE TABLE %s.%s (",
 					 quote_identifier(get_namespace_name(
 											RelationGetNamespace(foreign_rel))),
 					 quote_identifier(RelationGetRelationName(foreign_rel)));
@@ -186,9 +197,10 @@ pathman_sharding_inflate_foreign_table(Oid parent_tbl,
 		Form_pg_attribute attr = foreign_descr->attrs[i];
 
 		if (i != 0)
-			appendStringInfoString(query, ", ");
+			appendStringInfoString(&query, ", ");
 
-		appendStringInfo(query, "%s %s%s%s",
+		/* NAME TYPE[(typmod)] [NOT NULL] [COLLATE "collation"] */
+		appendStringInfo(&query, "%s %s%s%s",
 						 quote_identifier(NameStr(attr->attname)),
 						 format_type_with_typemod_qualified(attr->atttypid,
 															attr->atttypmod),
@@ -199,32 +211,43 @@ pathman_sharding_inflate_foreign_table(Oid parent_tbl,
 									""));
 	}
 
-	appendStringInfoChar(query, ')');
-
-	heap_close(foreign_rel, NoLock);
+	appendStringInfoChar(&query, ')');
 
 	/* Create table on foreign server */
-	pgfdw_execute_command(query->data, foreign_server);
+	pgfdw_execute_command(query.data, foreign_server);
 
 
+	/* Open parent in order to copy its indexes */
 	parent_rel = heap_open(parent_tbl, AccessShareLock);
 
-	index_list = RelationGetIndexList(foreign_rel);
+	index_list = RelationGetIndexList(parent_rel);
 	foreach (lc, index_list)
 	{
 		PG_TRY();
 		{
 			Oid		indexid = lfirst_oid(lc);
 			Datum	indexdef;
+			char   *indexdef_ctsr;
 
+			/* Protect index from concurrent drop */
+			LockRelationOid(indexid, AccessShareLock);
+
+			/* Fetch definition of this index */
 			indexdef = DirectFunctionCall1(pg_get_indexdef,
 										   ObjectIdGetDatum(indexid));
+			indexdef_ctsr = TextDatumGetCString(indexdef);
 
-			resetStringInfo(query);
-			appendStringInfoString(query, TextDatumGetCString(indexdef));
+			resetStringInfo(&query);
+			appendStringInfoString(&query,
+								   rebuild_indexdef_for_partition(indexdef_ctsr,
+																  indexid,
+																  parent_rel,
+																  foreign_rel));
+
+			UnlockRelationOid(indexid, AccessShareLock);
 
 			/* Create index on foreign server */
-			pgfdw_execute_command(query->data, foreign_server);
+			pgfdw_execute_command(query.data, foreign_server);
 		}
 		PG_CATCH();
 		{
@@ -234,13 +257,14 @@ pathman_sharding_inflate_foreign_table(Oid parent_tbl,
 	}
 
 	heap_close(parent_rel, AccessShareLock);
+	heap_close(foreign_rel, NoLock);
 }
 
 void
 pathman_sharding_deflate_foreign_table(Oid foreign_tbl,
 									   Oid foreign_server)
 {
-	const char	   *query;
+	char *query;
 
 	query = psprintf("DROP TABLE %s.%s CASCADE",
 					 quote_identifier(get_namespace_name(
@@ -258,12 +282,93 @@ pathman_sharding_deflate_foreign_table(Oid foreign_tbl,
  * ------------------
  */
 
+static char *
+rebuild_indexdef_for_partition(char *index_def,
+							   Oid index_relid,
+							   Relation parent_rel,
+							   Relation foreign_rel)
+{
+	char		   *cur = index_def,
+				   *prev;
+
+	const char	   *idxname = get_rel_name_quoted(index_relid);
+	const char	   *tblname = get_rel_name_qualified(RelationGetRelid(parent_rel));
+
+	StringInfoData	buffer;
+
+	elog(DEBUG1, "pathman_sharding: OLD indexdef is %s", index_def);
+
+	initStringInfo(&buffer);
+
+	/* CREATE [UNIQUE] INDEX */
+	prev = cur;
+	cur = skip_consts(cur, 2, "CREATE INDEX", "CREATE UNIQUE INDEX");
+	appendStringInfo(&buffer, "%s ", prev);
+
+	/* index name */
+	cur = skip_consts(cur, 1, idxname);
+
+	/* ON */
+	cur = skip_consts(cur, 1, "ON");
+	appendStringInfoString(&buffer, "ON ");
+
+	/* table name */
+	cur = skip_consts(cur, 1, tblname);
+	appendStringInfo(&buffer, "%s.%s ",
+					 quote_identifier(get_namespace_name(RelationGetNamespace(foreign_rel))),
+					 quote_identifier(RelationGetRelationName(foreign_rel)));
+
+	/* USING */
+	cur = skip_consts(cur, 1, "USING");
+	appendStringInfoString(&buffer, "USING ");
+
+	/* type */
+	prev = cur;
+	cur = skip_ident(cur);
+	appendStringInfo(&buffer, "%s ", prev);
+
+	/* (columns) */
+	cur = strchr(cur, '(');
+	if (!cur) elog(ERROR, "could not parse index columns");
+	appendStringInfoChar(&buffer, '(');
+	cur++;
+
+	prev = cur;
+	cur = skip_until(cur, ')');
+	if (!cur) elog(ERROR, "could not parse index columns");
+	appendStringInfo(&buffer, "%s)", prev);
+
+	elog(DEBUG1, "pathman_sharding: NEW indexdef is %s", buffer.data);
+
+	return buffer.data;
+}
+
+static const char *
+get_rel_name_quoted(Oid relid)
+{
+	const char *relname = get_rel_name(relid);
+
+	return relname ? quote_identifier(relname) : NULL;
+}
+
+static const char *
+get_rel_name_qualified(Oid relid)
+{
+	Oid		nspid = get_rel_namespace(relid);
+	char   *nspname;
+
+	/* Qualify the name if it's not visible in search path */
+	nspname = RelationIsVisible(relid) ? NULL : get_namespace_name(nspid);
+
+	return quote_qualified_identifier(nspname, get_rel_name(relid));
+}
+
 static Oid
 pg_pathman_get_parent(Oid partition_relid)
 {
-	const char	   *query;
-	Oid				parent_relid = InvalidOid;
-	int				res;
+	char   *query;
+	Oid		parent_relid = InvalidOid;
+	int		res;
 
 	query = psprintf("SELECT partrel FROM %s.%s "
 					 " JOIN pg_catalog.pg_inherits "
@@ -296,6 +401,8 @@ pg_pathman_get_parent(Oid partition_relid)
 
 	elog(DEBUG1, "pathman_sharding: parent is %u", parent_relid);
 
+	pfree(query);
+
 	return parent_relid;
 }
 
@@ -306,7 +413,7 @@ pgfdw_execute_command(const char *command, Oid foreign_server)
 	Oid				pgfdw_exec_procid;
 	const char	   *proc_name;
 
-	elog(DEBUG1, "pathman_sharding query: %s, server: %s",
+	elog(DEBUG1, "pathman_sharding: query: %s, server: %s",
 		 command, server->servername);
 
 	/* Build schema-qualified name of POSTGRES_FDW_COMMAND_PROC */

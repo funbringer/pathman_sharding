@@ -33,7 +33,7 @@ BEGIN
 	PERFORM @extschema@.lock_partitioned_relation(parent_relid);
 
 	IF start_value >= end_value THEN
-		RAISE EXCEPTION 'failed to create shard: start_value is greater than end_value';
+		RAISE EXCEPTION 'failed to create partition: start_value is greater than end_value';
 	END IF;
 
 	/* check range overlap */
