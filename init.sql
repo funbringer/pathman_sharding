@@ -33,36 +33,36 @@ GRANT SELECT ON @extschema@.pathman_foreign_partition_list TO PUBLIC;
  * Distribute partitions among foreign servers.
  */
 CREATE OR REPLACE FUNCTION @extschema@.distribute_partitions_among_servers(
-	IN partitions	TEXT[],
-	IN servers		TEXT[],
-	OUT partition	TEXT,
-	OUT server		TEXT)
+	IN partitions		TEXT[],
+	IN foreign_servers	TEXT[],
+	OUT partition		TEXT,
+	OUT foreign_server	TEXT)
 RETURNS SETOF RECORD AS $$
 DECLARE
 	current_parts		TEXT[];
-	current_parts_len	INT8;
-	partitions_len		INT8 := array_length(partitions, 1);
-	servers_len			INT8 := array_length(servers, 1);
-	j					INT8;
+	current_parts_len	INT4;
+	partitions_len		INT4 := array_length(partitions, 1);
+	foreign_servers_len	INT4 := array_length(foreign_servers, 1);
+	j					INT4;
 
 BEGIN
 	IF array_ndims(partitions) != 1 THEN
 		RAISE EXCEPTION '"partitions" should have exactly 1 dimension';
 	END IF;
 
-	IF array_ndims(servers) != 1 THEN
-		RAISE EXCEPTION '"servers" should have exactly 1 dimension';
+	IF array_ndims(foreign_servers) != 1 THEN
+		RAISE EXCEPTION '"foreign_servers" should have exactly 1 dimension';
 	END IF;
 
-	FOR current_parts IN (SELECT partitions[i: i + servers_len - 1]
-						  FROM generate_series(1, partitions_len, servers_len) i)
+	FOR current_parts IN (SELECT partitions[i: i + foreign_servers_len - 1]
+						  FROM generate_series(1, partitions_len, foreign_servers_len) i)
 	LOOP
 		current_parts_len := array_length(current_parts, 1);
 
 		FOR j IN 1..current_parts_len
 		LOOP
 			partition := current_parts[j];
-			server := servers[j];
+			foreign_server := foreign_servers[j];
 
 			RETURN NEXT;
 		END LOOP;
