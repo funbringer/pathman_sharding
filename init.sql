@@ -1,3 +1,13 @@
+/* ------------------------------------------------------------------------
+ *
+ * init.sql
+ *		Creates config table and provides common utility functions
+ *
+ * Copyright (c) 2017, Postgres Professional
+ *
+ * ------------------------------------------------------------------------
+ */
+
 DO language plpgsql
 $$
 	DECLARE

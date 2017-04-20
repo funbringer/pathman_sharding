@@ -31,5 +31,5 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
-$(EXTENSION)--$(EXTVERSION).sql: init.sql range.sql
+$(EXTENSION)--$(EXTVERSION).sql: init.sql range.sql hash.sql
 	cat $^ > $@

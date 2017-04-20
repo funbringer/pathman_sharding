@@ -72,8 +72,6 @@ BEGIN
 				   v_check_name,
 				   v_cond);
 
-	PERFORM @extschema@.on_update_partitions(parent_relid);
-
 	RETURN v_part_name;
 END
 $$
