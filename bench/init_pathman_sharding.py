@@ -2,6 +2,7 @@
 
 import testgres
 from functools import reduce
+from time import time
 
 
 preload_libs = "shared_preload_libraries = 'pg_tsdtm, pathman_sharding, pg_pathman'"
@@ -9,6 +10,7 @@ server_sql = "create server {0} foreign data wrapper {1} options(dbname '{2}', p
 user_mapping_sql = "create user mapping for public server {0}"
 
 
+NUM_ROWS = 100000
 NUM_PARTITIONS = 100
 NUM_SHARDS = 3
 
@@ -46,8 +48,11 @@ def register_shards(master, shards):
 		master_con.commit()
 
 def create_partitions(master, shards):
+	print()
 	with master.connect(dbname=DB_NAME) as master_con:
 		master_con.begin()
+
+		print('creating table test(val int not null)')
 		master_con.execute("create table test(val int not null)")
 
 		table_sql = (
@@ -59,12 +64,22 @@ def create_partitions(master, shards):
 			")"
 		)
 
+		print('creating foreign hash partitions ({})'.format(NUM_PARTITIONS))
 		master_con.execute(
 			table_sql.format(
 				NUM_PARTITIONS,
 				','.join([shard.name for shard in shards])
 			)
 		)
+
+		print('inserting {} rows'.format(NUM_ROWS), end='... ', flush=True)
+		t1 = time()
+		master_con.execute(
+			"insert into test select generate_series(1, $1)",
+			NUM_ROWS
+		)
+		t2 = time()
+		print('finished ({} ms)'.format(round((t2 - t1) * 1000, 2)))
 
 		master_con.commit()
 
@@ -105,15 +120,16 @@ def main():
 		create_extension(master, 'pathman_sharding')
 		create_extension(master, 'pg_tsdtm')
 
+		print()
 		for i in range(0, NUM_SHARDS):
 			shard_name = 'shard_{}'.format(i)
 
 			print('initializing {}'.format(shard_name))
 			shard = (
 				testgres
-				.get_new_node(shard_name)
-				.init()
-				.start()
+					.get_new_node(shard_name)
+					.init()
+					.start()
 			)
 			print('\tcreating extensions')
 			create_extension(shard, 'pg_tsdtm')
