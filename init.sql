@@ -56,11 +56,13 @@ DECLARE
 	j					INT4;
 
 BEGIN
-	IF array_ndims(partitions) != 1 THEN
+	IF array_ndims(partitions) IS NULL OR
+	   array_ndims(partitions) != 1 THEN
 		RAISE EXCEPTION '"partitions" should have exactly 1 dimension';
 	END IF;
 
-	IF array_ndims(foreign_servers) != 1 THEN
+	IF array_ndims(foreign_servers) IS NULL OR
+	   array_ndims(foreign_servers) != 1 THEN
 		RAISE EXCEPTION '"foreign_servers" should have exactly 1 dimension';
 	END IF;
 
