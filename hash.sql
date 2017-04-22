@@ -17,7 +17,8 @@ CREATE OR REPLACE FUNCTION @extschema@.create_foreign_hash_partitions(
 	partitions_count	INT4,
 	foreign_servers		TEXT[],
 	partition_data		BOOLEAN DEFAULT TRUE,
-	partition_names		TEXT[] DEFAULT NULL)
+	partition_names		TEXT[] DEFAULT NULL,
+	distibution_proc	REGPROC DEFAULT '@extschema@.distribute_partitions_among_servers')
 RETURNS INTEGER AS
 $$
 DECLARE
@@ -87,8 +88,8 @@ BEGIN
 
 	/* Create partitions */
 	FOR v_part_name, v_foreign_server IN
-		SELECT * FROM @extschema@.distribute_partitions_among_servers(partition_names,
-																	  foreign_servers)
+		EXECUTE format('SELECT * FROM %s($1, $2)', distibution_proc)
+		USING partition_names, foreign_servers
 	LOOP
 		EXECUTE format('CREATE FOREIGN TABLE %s() INHERITS (%s) SERVER %s',
 					   v_part_name,
