@@ -1,0 +1,50 @@
+{
+	"master": {
+		"configs": [
+			{
+				"name": "postgresql.conf",
+				"settings": [
+					{
+						"key": "shared_preload_libraries",
+						"value": "'pg_tsdtm, pathman_sharding, pg_pathman'"
+					}
+				]
+			}
+		],
+		"extensions": ["pg_tsdtm", "postgres_fdw", "pg_pathman", "pathman_sharding"],
+		"shards": 4,
+		"tables": [
+			{
+				"name": "test",
+				"columns": ["id int not null", "val serial"],
+				"partitioning": {
+					"type": "HASH",
+					"expression": "id",
+					"partitions": 100
+				},
+				"exists": false,
+				"data_source": "SELECT generate_series(1, 100000)",
+				"extra_command": "VACUUM ANALYZE"
+			}
+		]
+	},
+	"shard": {
+		"configs": [
+			{
+				"name": "postgresql.conf",
+				"settings": [
+					{
+						"key": "shared_preload_libraries",
+						"value": "'pg_tsdtm'"
+					},
+					{
+						"key": "fsync",
+						"value": "off"
+					}
+				]
+			}
+		],
+		"fdw": "postgres_fdw",
+		"extensions": ["pg_tsdtm"]
+	}
+}
