@@ -51,13 +51,13 @@ BEGIN
 	END IF;
 
 	/* Check dimensions of foreign servers array */
-	IF array_ndims(foreign_servers) != 1 THEN
+	IF array_ndims(foreign_servers) IS NULL OR
+	   array_ndims(foreign_servers) != 1 THEN
 		RAISE EXCEPTION '"foreign_servers" should have exactly 1 dimension';
 	END IF;
 
 	/* Check if foreign servers array is empty */
-	IF array_ndims(foreign_servers) IS NULL OR
-	   array_length(foreign_servers, 1) = 0 THEN
+	IF array_length(foreign_servers, 1) = 0 THEN
 		RAISE EXCEPTION '"foreign_servers" should not be empty';
 	END IF;
 
@@ -71,12 +71,12 @@ BEGIN
 			 generate_series(1, partitions_count) AS partition_idx
 		INTO partition_names;
 	ELSE
-		IF array_ndims(partition_names) != 1 THEN
+		IF array_ndims(partition_names) IS NULL OR
+		   array_ndims(partition_names) != 1 THEN
 			RAISE EXCEPTION '"partition_names" should have exactly 1 dimension';
 		END IF;
 
-		IF array_ndims(partition_names) IS NULL OR
-		   array_length(partition_names, 1) != partitions_count THEN
+		IF array_length(partition_names, 1) != partitions_count THEN
 			RAISE EXCEPTION '"partition_names" should have exactly "partitions_count" members';
 		END IF;
 	END IF;
